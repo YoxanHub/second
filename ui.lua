@@ -11,11 +11,6 @@ local Library = {}
 
 Library.Flags = {}
 Library.Windows = {}
-Library.Animations = true
-
-function Library:SetAnimations(enabled)
-    Library.Animations = enabled ~= false
-end
 
 local function normalize(source, map)
     local opts = {}
@@ -42,16 +37,13 @@ local function finishElement(tab, opts, element, frame, kind)
     element._type = kind
     element._frame = frame
     element._listeners = element._listeners or {}
-    if kind ~= "Section" and tab and tab._secState and frame then
-        table.insert(tab._secState.items, frame)
-        if tab._secState.open == false then
+    if kind ~= "Section" and tab and tab._secItems and frame then
+        table.insert(tab._secItems, frame)
+        if tab._secOpen == false then
             frame.Visible = false
         end
     end
     local window = tab and tab.Window
-    if window and opts.Name and kind ~= "Section" and kind ~= "Divider" and type(window.AddSearchEntry) == "function" then
-        window:AddSearchEntry(opts.Name, tab.Name .. " " .. kind .. " " .. (opts.Desc or ""), tab, frame)
-    end
     if opts.Flag then
         Library.Flags[opts.Flag] = element
         if window then
@@ -109,17 +101,7 @@ Library.Assets = {
 }
 
 local LUCIDE_URL = "https://raw.githubusercontent.com/Footagesus/Icons/refs/heads/main/lucide/dist/Icons.lua"
-local ICON_CACHE_FILE = "CloutHub/lucide-icons.lua"
 local lucideSet = nil
-
-local function ensureParentFolder(path)
-    local folder = path:match("^(.+)/[^/]+$")
-    pcall(function()
-        if folder and type(isfolder) == "function" and type(makefolder) == "function" and not isfolder(folder) then
-            makefolder(folder)
-        end
-    end)
-end
 
 local function cloutHttpFetch(url)
     local ok, res = pcall(function() return game:HttpGet(url) end)
@@ -148,20 +130,7 @@ local function loadLucide()
         return lucideSet
     end
     local ok, result = pcall(function()
-        local source
-        if type(readfile) == "function" and type(isfile) == "function" and isfile(ICON_CACHE_FILE) then
-            local okRead, cached = pcall(readfile, ICON_CACHE_FILE)
-            if okRead and type(cached) == "string" and #cached >= 100 then
-                source = cached
-            end
-        end
-        if not source then
-            source = cloutHttpFetch(LUCIDE_URL)
-            if type(source) == "string" and #source >= 100 and type(writefile) == "function" then
-                ensureParentFolder(ICON_CACHE_FILE)
-                pcall(writefile, ICON_CACHE_FILE, source)
-            end
-        end
+        local source = cloutHttpFetch(LUCIDE_URL)
         if type(source) ~= "string" or #source < 100 then error("icon fetch failed") end
         return loadstring(source)()
     end)
@@ -172,13 +141,6 @@ local function loadLucide()
         warn("[CloutHub] lucide icons unavailable: " .. tostring(result))
     end
     return lucideSet
-end
-
-function Library:ClearIconCache()
-    if type(delfile) == "function" and type(isfile) == "function" and isfile(ICON_CACHE_FILE) then
-        pcall(delfile, ICON_CACHE_FILE)
-    end
-    lucideSet = nil
 end
 
 local FONT_PRESETS = {
@@ -208,7 +170,7 @@ function Library:LoadFont(opts)
         warn("[CloutHub] no font weights for " .. name)
         return false
     end
-    local folder = opts.Folder or "CloutHubFonts"
+    local folder = opts.Folder or "AirFlowFonts"
     pcall(function()
         if type(isfolder) == "function" and type(makefolder) == "function" and not isfolder(folder) then
             makefolder(folder)
@@ -262,7 +224,7 @@ function Library:PreloadIcons()
     return loadLucide() ~= false
 end
 
-local function resolveIcon(icon, silent)
+local function resolveIcon(icon)
     if typeof(icon) == "table" then
         return icon.Image, icon.RectOffset, icon.RectSize
     end
@@ -288,9 +250,7 @@ local function resolveIcon(icon, silent)
     elseif type(entry) == "string" then
         return entry
     end
-    if not silent then
-        warn("[CloutHub] unknown lucide icon: " .. name)
-    end
+    warn("[CloutHub] unknown lucide icon: " .. name)
     return nil
 end
 
@@ -321,9 +281,6 @@ local tweenInfoCache = {}
 
 local function tween(object, props, duration, style, direction)
     duration = duration or 0.2
-    if Library.Animations == false then
-        duration = 0
-    end
     if props.GroupTransparency ~= nil and not object:IsA("CanvasGroup") then
         local filtered = {}
         for key, value in pairs(props) do
@@ -478,8 +435,14 @@ local function defaultParent()
     return LocalPlayer:WaitForChild("PlayerGui")
 end
 
+local insetFrame, insetValue = nil, Vector2.zero
 local function pointerPosition()
-    return UserInputService:GetMouseLocation() - GuiService:GetGuiInset()
+    local frame = time()
+    if insetFrame ~= frame then
+        insetFrame = frame
+        insetValue = GuiService:GetGuiInset()
+    end
+    return UserInputService:GetMouseLocation() - insetValue
 end
 
 local function isPress(input)
@@ -664,7 +627,7 @@ local function card(tab, className, height, opts)
         BackgroundColor3 = Theme.Surface2,
         BorderSizePixel = 0,
         LayoutOrder = tab:_nextOrder(),
-        Parent = tab._activeList or tab.List,
+        Parent = tab.List,
     }
     if className == "TextButton" then
         props.AutoButtonColor = false
@@ -738,32 +701,20 @@ end
 
 function Tab:Section(text)
     local expanded = false
-    local side = nil
     if type(text) == "table" then
         expanded = text.Expanded == true
-        side = text.Side
         text = text.Name or text.Title or ""
     end
-    if side and self._columns then
-        local key = "Left"
-        if type(side) == "number" then
-            key = side == 2 and "Right" or "Left"
-        elseif tostring(side):lower() == "right" then
-            key = "Right"
-        end
-        self._activeList = self._columns[key] or self._activeList
-    end
-    local parentList = self._activeList or self.List
     local holder = create("Frame", {
         Size = UDim2.new(1, 0, 0, 42),
         BackgroundColor3 = Theme.Surface2,
         BackgroundTransparency = 0,
         Active = true,
         LayoutOrder = self:_nextOrder(),
-        Parent = parentList,
+        Parent = self.List,
     })
     corner(holder, UDim.new(0, 8))
-    local sectionStroke = stroke(holder, Theme.Accent, 0.55)
+    stroke(holder, Theme.Accent, 0.55)
     create("Frame", {
         AnchorPoint = Vector2.new(0, 1),
         Position = UDim2.new(0, 0, 1, 0),
@@ -785,11 +736,10 @@ function Tab:Section(text)
     local arrow = label({
         Position = UDim2.fromOffset(4, 12),
         Size = UDim2.fromOffset(16, 18),
-        Text = ">",
+        Text = expanded and "v" or ">",
         TextSize = TOUCH and 13 or 12,
         TextXAlignment = Enum.TextXAlignment.Center,
         TextColor3 = Theme.Accent,
-        Rotation = expanded and 90 or 0,
         ZIndex = 7,
         Parent = holder,
     })
@@ -804,34 +754,24 @@ function Tab:Section(text)
         ZIndex = 7,
         Parent = holder,
     })
-    local state = { items = {}, open = expanded }
-    self._secState = state
+    local items = {}
+    self._secItems = items
+    self._secOpen = expanded
+    self._secHolder = holder
     holder:SetAttribute("CloutOpen", expanded)
     local function apply(open)
-        state.open = open
         holder:SetAttribute("CloutOpen", open)
-        for _, it in ipairs(state.items) do
+        for _, it in ipairs(items) do
             pcall(function() it.Visible = open and it:GetAttribute("CloutHide") ~= true end)
         end
-        tween(arrow, { Rotation = open and 90 or 0 }, 0.25, Enum.EasingStyle.Quint)
+        arrow.Text = open and "v" or ">"
     end
     if not expanded then
         task.defer(function() apply(false) end)
     end
-    btn.MouseEnter:Connect(function()
-        tween(sectionStroke, { Transparency = 0.25 }, 0.15)
-        tween(text_, { TextColor3 = Theme.Accent }, 0.15)
-    end)
-    btn.MouseLeave:Connect(function()
-        tween(sectionStroke, { Transparency = 0.55 }, 0.25)
-        tween(text_, { TextColor3 = Theme.Text }, 0.25)
-    end)
     btn.MouseButton1Click:Connect(function()
-        apply(not state.open)
-        tween(holder, { BackgroundColor3 = Theme.Surface3 }, 0.08)
-        task.delay(0.12, function()
-            tween(holder, { BackgroundColor3 = Theme.Surface2 }, 0.25)
-        end)
+        self._secOpen = not self._secOpen
+        apply(self._secOpen)
     end)
     return finishElement(self, {}, {
         Set = function(_, value)
@@ -846,7 +786,7 @@ function Tab:Divider()
         BackgroundColor3 = Theme.Stroke,
         BorderSizePixel = 0,
         LayoutOrder = self:_nextOrder(),
-        Parent = self._activeList or self.List,
+        Parent = self.List,
     })
     return finishElement(self, {}, {}, line, "Divider")
 end
@@ -860,7 +800,7 @@ function Tab:Label(opts)
         FontFace = Fonts.Regular,
         TextColor3 = opts.Color or Theme.Muted,
         LayoutOrder = self:_nextOrder(),
-        Parent = self._activeList or self.List,
+        Parent = self.List,
     })
     padding(text_, 2)
     local handle = {
@@ -1337,11 +1277,7 @@ function Tab:Slider(opts)
     end
 
     local function updateFromX(x)
-        local width = track.AbsoluteSize.X
-        if width <= 0 then
-            return
-        end
-        local frac = math.clamp((x - track.AbsolutePosition.X) / width, 0, 1)
+        local frac = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
         self_:Set(min + (max - min) * frac)
     end
 
@@ -1454,20 +1390,12 @@ function Tab:Dropdown(opts)
         fitChip(false)
     end)
 
-    local listHolder = create("ScrollingFrame", {
+    local listHolder = create("Frame", {
         Position = UDim2.new(0, 10, 0, height),
         Size = UDim2.new(1, -20, 0, 0),
         BackgroundTransparency = 1,
-        BorderSizePixel = 0,
-        ScrollBarThickness = 2,
-        ScrollBarImageColor3 = Theme.Accent,
-        ScrollBarImageTransparency = 0.5,
-        AutomaticCanvasSize = Enum.AutomaticSize.Y,
-        CanvasSize = UDim2.new(),
-        ClipsDescendants = true,
         Parent = frame,
     })
-    padding(listHolder, 1, 4, 2, 2)
     create("UIListLayout", {
         SortOrder = Enum.SortOrder.LayoutOrder,
         Padding = UDim.new(0, 4),
@@ -1479,7 +1407,6 @@ function Tab:Dropdown(opts)
     local optionButtons = {}
     local filter = ""
     local SEARCH_THRESHOLD = opts.SearchAfter or 6
-    local MAX_ROWS = math.max(math.floor(tonumber(opts.MaxVisible) or 8), 3)
 
     local searchHolder = create("Frame", {
         Size = UDim2.new(1, 0, 0, DROPDOWN_OPTION_HEIGHT),
@@ -1576,7 +1503,7 @@ function Tab:Dropdown(opts)
     end
 
     local function expandedHeight()
-        local rows = math.min(visibleCount() + (searchHolder.Visible and 1 or 0), MAX_ROWS)
+        local rows = visibleCount() + (searchHolder.Visible and 1 or 0)
         return height + rows * (DROPDOWN_OPTION_HEIGHT + 4) + 8
     end
 
@@ -1588,9 +1515,7 @@ function Tab:Dropdown(opts)
             searchBox.Text = ""
             applyFilter()
         end
-        local listArea = math.max((open and expandedHeight() or height) - height - 6, 0)
         tween(frame, { Size = UDim2.new(1, 0, 0, open and expandedHeight() or height) }, 0.3, Enum.EasingStyle.Quint)
-        tween(listHolder, { Size = UDim2.new(1, -20, 0, listArea) }, 0.3, Enum.EasingStyle.Quint)
         tween(searchHolder, { BackgroundTransparency = open and 0 or 1 }, 0.2)
         tween(searchStroke, { Transparency = open and 0 or 1 }, 0.2)
         tween(searchBox, { TextTransparency = open and 0 or 1 }, 0.2)
@@ -1732,7 +1657,6 @@ function Tab:Dropdown(opts)
         applyFilter()
         if self_.Open then
             frame.Size = UDim2.new(1, 0, 0, expandedHeight())
-            listHolder.Size = UDim2.new(1, -20, 0, math.max(expandedHeight() - height - 6, 0))
         end
     end
 
@@ -1780,7 +1704,6 @@ function Tab:Dropdown(opts)
         applyFilter()
         if self_.Open then
             tween(frame, { Size = UDim2.new(1, 0, 0, expandedHeight()) }, 0.2, Enum.EasingStyle.Quint)
-            tween(listHolder, { Size = UDim2.new(1, -20, 0, math.max(expandedHeight() - height - 6, 0)) }, 0.2, Enum.EasingStyle.Quint)
         end
     end)
     buildOptions()
@@ -1916,8 +1839,6 @@ function Tab:Keybind(opts)
     })
 
     local self_ = { Value = opts.Default, Listening = false }
-    local holdMode = tostring(opts.Mode or "Toggle"):lower() == "hold"
-    local held = false
 
     local function fitChip(instant)
         local width = math.max(chipLabel.TextBounds.X + 20, TOUCH and 44 or 36)
@@ -1972,24 +1893,9 @@ function Tab:Keybind(opts)
             return
         end
         if not gameProcessed and self_.Value ~= nil and input.KeyCode == self_.Value then
-            if holdMode then
-                if not held then
-                    held = true
-                    safeCall(opts.Callback, true)
-                end
-            else
-                safeCall(opts.Callback, input.KeyCode)
-            end
+            safeCall(opts.Callback, input.KeyCode)
         end
     end, self_)
-    if holdMode then
-        self.Window:_listen("Ended", function(input)
-            if held and input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == self_.Value then
-                held = false
-                safeCall(opts.Callback, false)
-            end
-        end, self_)
-    end
 
     render()
     task.defer(fitChip, true)
@@ -2634,13 +2540,6 @@ local NOTIFY_COLORS = {
     Error = Theme.Error,
 }
 
-local NOTIFY_TYPE_ICONS = {
-    Success = { "circle-check", "check-circle", "check" },
-    Warning = { "triangle-alert", "alert-triangle", "alert-circle" },
-    Error = { "circle-x", "x-circle", "x" },
-    Info = { "info" },
-}
-
 local Window = {}
 Window.__index = Window
 
@@ -2673,10 +2572,6 @@ function Library.Window(_, opts)
     end
     local renderDispatch = dispatch("Render")
     table.insert(self._connections, RunService.RenderStepped:Connect(function(deltaTime)
-        local root = self.Root
-        if not root or not root.Visible then
-            return
-        end
         renderDispatch(deltaTime)
         for _, step in ipairs(self._frameSteps) do
             step(deltaTime)
@@ -2933,8 +2828,8 @@ function Library.Window(_, opts)
         Parent = searchResults,
     })
     self._searchEntries = {}
-    function self:AddSearchEntry(entryLabel, entryKeys, entryTab, entryFrame)
-        table.insert(self._searchEntries, { label = entryLabel, keys = entryKeys, tab = entryTab, frame = entryFrame })
+    function self:AddSearchEntry(entryLabel, entryKeys, entryTab)
+        table.insert(self._searchEntries, { label = entryLabel, keys = entryKeys, tab = entryTab })
     end
     local function renderSearch(query)
         for _, child in ipairs(searchResults:GetChildren()) do
@@ -2977,9 +2872,6 @@ function Library.Window(_, opts)
                     end
                     searchBar.Text = ""
                     searchResults.Visible = false
-                    if entry.frame then
-                        self:_jumpToElement(entry.frame)
-                    end
                 end)
             end
         end
@@ -3044,7 +2936,7 @@ function Library.Window(_, opts)
     padding(closeButton, 0, 0, 1, 0)
     corner(closeButton, UDim.new(0, 8))
     closeButton.MouseEnter:Connect(function()
-        tween(closeButton, { BackgroundTransparency = 0, TextColor3 = Theme.Error }, 0.15)
+        tween(closeButton, { BackgroundTransparency = 0, TextColor3 = Theme.Text }, 0.15)
     end)
     closeButton.MouseLeave:Connect(function()
         tween(closeButton, { BackgroundTransparency = 1, TextColor3 = Theme.Muted }, 0.2)
@@ -3162,19 +3054,6 @@ function Library.Window(_, opts)
 end
 
 Library.CreateWindow = Library.Window
-
-function Library:Destroy()
-    for index = #Library.Windows, 1, -1 do
-        Library.Windows[index]:Destroy()
-    end
-end
-
-function Library:SetWatermark(opts)
-    local window = Library.Windows[#Library.Windows]
-    if window then
-        window:SetWatermark(opts)
-    end
-end
 
 function Library:Notify(opts)
     local window = Library.Windows[#Library.Windows]
@@ -3310,13 +3189,10 @@ function Window:_revealCards(tab, baseDelay)
     end
     tab._revealed = true
     local index = 0
-    local lists = tab._columns and { tab._columns.Left, tab._columns.Right } or { tab.List }
-    for _, list in ipairs(lists) do
-        for _, child in ipairs(list:GetChildren()) do
-            if child:IsA("GuiObject") then
-                popIn(child, (baseDelay or 0) + index * 0.035)
-                index += 1
-            end
+    for _, child in ipairs(tab.List:GetChildren()) do
+        if child:IsA("GuiObject") then
+            popIn(child, (baseDelay or 0) + index * 0.035)
+            index += 1
         end
     end
 end
@@ -3334,9 +3210,6 @@ function Window:_playIntro(morph)
         self:_revealCards(self.CurrentTab, morph and 0.15 or 0.25)
     end
     root.Visible = true
-    if self.OpenButton then
-        self.OpenButton.Visible = false
-    end
     if morph then
         scale.Scale = self._fitScale or 1
         root.Position = UDim2.fromScale(0.5, 0.5)
@@ -4447,79 +4320,40 @@ function Window:Tab(opts, icon)
         })
     end
     local listTop = opts.Desc and 56 or 44
-    local columns = math.max(1, math.floor(tonumber(opts.Columns) or 1))
-    local list
-    if columns > 1 then
-        local holder = create("Frame", {
-            Position = UDim2.fromOffset(0, listTop),
-            Size = UDim2.new(1, 0, 1, -listTop),
-            BackgroundTransparency = 1,
-            Parent = page,
-        })
-        local function makeColumn(rightSide)
-            local column = create("ScrollingFrame", {
-                AnchorPoint = rightSide and Vector2.new(1, 0) or Vector2.new(0, 0),
-                Position = rightSide and UDim2.new(1, -18, 0, 0) or UDim2.fromOffset(18, 0),
-                Size = UDim2.new(0.5, -21, 1, -18),
-                BackgroundTransparency = 1,
-                BorderSizePixel = 0,
-                ScrollBarThickness = 2,
-                ScrollBarImageColor3 = Theme.Accent,
-                ScrollBarImageTransparency = 0.5,
-                AutomaticCanvasSize = Enum.AutomaticSize.Y,
-                CanvasSize = UDim2.new(),
-                Parent = holder,
-            })
-            padding(column, 1, 5, 2, 16)
-            create("UIListLayout", {
-                SortOrder = Enum.SortOrder.LayoutOrder,
-                Padding = UDim.new(0, 8),
-                Parent = column,
-            })
-            return column
-        end
-        tab._columns = { Left = makeColumn(false), Right = makeColumn(true) }
-        list = tab._columns.Left
-    else
-        list = create("ScrollingFrame", {
-            Position = UDim2.fromOffset(0, listTop),
-            Size = UDim2.new(1, 0, 1, -listTop),
-            BackgroundTransparency = 1,
-            BorderSizePixel = 0,
-            ScrollBarThickness = 2,
-            ScrollBarImageColor3 = Theme.Accent,
-            ScrollBarImageTransparency = 0.5,
-            AutomaticCanvasSize = Enum.AutomaticSize.Y,
-            CanvasSize = UDim2.new(),
-            Parent = page,
-        })
-        padding(list, 18, 18, 2, 16)
-        create("UIListLayout", {
-            SortOrder = Enum.SortOrder.LayoutOrder,
-            Padding = UDim.new(0, 8),
-            Parent = list,
-        })
-    end
+    local list = create("ScrollingFrame", {
+        Position = UDim2.fromOffset(0, listTop),
+        Size = UDim2.new(1, 0, 1, -listTop),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 2,
+        ScrollBarImageColor3 = Theme.Accent,
+        ScrollBarImageTransparency = 0.5,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(),
+        Parent = page,
+    })
+    padding(list, 18, 18, 2, 16)
+    create("UIListLayout", {
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        Padding = UDim.new(0, 8),
+        Parent = list,
+    })
     tab.List = list
-    tab._activeList = list
 
     local empty = emptyState(page, opts.Icon or "layout-grid", opts.EmptyText or "Nothing here yet")
     local elementCount = 0
-    local watched = tab._columns and { tab._columns.Left, tab._columns.Right } or { list }
-    for _, watchedList in ipairs(watched) do
-        watchedList.ChildAdded:Connect(function(child)
-            if child:IsA("GuiObject") then
-                elementCount += 1
-                empty.Visible = false
-            end
-        end)
-        watchedList.ChildRemoved:Connect(function(child)
-            if child:IsA("GuiObject") then
-                elementCount = math.max(elementCount - 1, 0)
-                empty.Visible = elementCount <= 0
-            end
-        end)
-    end
+    list.ChildAdded:Connect(function(child)
+        if child:IsA("GuiObject") then
+            elementCount += 1
+            empty.Visible = false
+        end
+    end)
+    list.ChildRemoved:Connect(function(child)
+        if child:IsA("GuiObject") then
+            elementCount = math.max(elementCount - 1, 0)
+            empty.Visible = elementCount <= 0
+        end
+    end)
     empty.Visible = true
 
     button.MouseEnter:Connect(function()
@@ -4770,32 +4604,6 @@ function Window:Confirm(opts)
     })
 end
 
-function Window:_jumpToElement(frame)
-    task.delay(0.4, function()
-        if self._destroyed or not frame or not frame.Parent or not frame.Visible then
-            return
-        end
-        local node = frame.Parent
-        local scroll = nil
-        while node and node ~= self.Body do
-            if node:IsA("ScrollingFrame") then
-                scroll = node
-                break
-            end
-            node = node.Parent
-        end
-        if scroll then
-            local scale = self.Scale.Scale
-            local y = (frame.AbsolutePosition.Y - scroll.AbsolutePosition.Y) / scale + scroll.CanvasPosition.Y
-            scroll.CanvasPosition = Vector2.new(0, math.max(y - 10, 0))
-        end
-        local frameStroke = frame:FindFirstChildOfClass("UIStroke")
-        if frameStroke then
-            flashStroke(frameStroke)
-        end
-    end)
-end
-
 function Window:_listen(kind, handler, owner)
     local list = self._inputListeners[kind]
     table.insert(list, handler)
@@ -4922,9 +4730,6 @@ function Window:Toggle(open)
         return
     end
     self.Open = open
-    if self.OpenButton then
-        self.OpenButton.Visible = not open
-    end
     if open then
         self.Root.Visible = true
         tween(self.Scale, { Scale = self._fitScale or 1 }, 0.4, Enum.EasingStyle.Back)
@@ -4957,107 +4762,8 @@ function Window:SetKeybind(keyCode)
     self._keyChipLabel.Text = keyName(keyCode)
 end
 
-function Window:SetWatermark(opts)
-    if opts == false or (type(opts) == "table" and opts.Enabled == false) then
-        self._watermarkTemplate = nil
-        if self._watermark then
-            self._watermark.Visible = false
-        end
-        return
-    end
-    opts = normalize(opts, { Text = "Text", Name = "Text" })
-    local template = opts.Text or "clouthub | {fps} fps | {ping} ms"
-
-    local wm = self._watermark
-    if not wm then
-        wm = create("Frame", {
-            Position = UDim2.fromOffset(12, -34),
-            Size = UDim2.fromOffset(0, 26),
-            AutomaticSize = Enum.AutomaticSize.X,
-            BackgroundColor3 = Theme.Background,
-            BackgroundTransparency = 0.05,
-            BorderSizePixel = 0,
-            ZIndex = 60,
-            Visible = false,
-            Parent = self.Gui,
-        })
-        corner(wm, UDim.new(1, 0))
-        stroke(wm, Theme.Stroke, 0.4)
-        create("UIListLayout", {
-            FillDirection = Enum.FillDirection.Horizontal,
-            SortOrder = Enum.SortOrder.LayoutOrder,
-            VerticalAlignment = Enum.VerticalAlignment.Center,
-            Padding = UDim.new(0, 8),
-            Parent = wm,
-        })
-        padding(wm, 11, 11)
-        local dot = create("Frame", {
-            Size = UDim2.fromOffset(6, 6),
-            BackgroundColor3 = Theme.Accent,
-            BorderSizePixel = 0,
-            LayoutOrder = 1,
-            Parent = wm,
-        })
-        corner(dot, UDim.new(1, 0))
-        self._watermarkLabel = label({
-            Size = UDim2.new(0, 0, 1, 0),
-            AutomaticSize = Enum.AutomaticSize.X,
-            Text = "",
-            TextSize = TOUCH and 13 or 12,
-            FontFace = Fonts.Medium,
-            TextColor3 = Theme.Muted,
-            TextTruncate = Enum.TextTruncate.None,
-            LayoutOrder = 2,
-            Parent = wm,
-        })
-        self._watermark = wm
-        self._wmFrames = 0
-        self._wmLast = os.clock()
-        table.insert(self._connections, RunService.RenderStepped:Connect(function()
-            self._wmFrames = (self._wmFrames or 0) + 1
-        end))
-        task.spawn(function()
-            while not self._destroyed and wm.Parent do
-                if wm.Visible and self._watermarkTemplate then
-                    local now = os.clock()
-                    local fps = math.floor((self._wmFrames or 0) / math.max(now - (self._wmLast or now), 0.001) + 0.5)
-                    self._wmFrames = 0
-                    self._wmLast = now
-                    local ping = 0
-                    pcall(function()
-                        ping = math.floor(LocalPlayer:GetNetworkPing() * 1000)
-                    end)
-                    self._watermarkLabel.Text = (self._watermarkTemplate:gsub("{(%w+)}", function(token)
-                        if token == "fps" then
-                            return tostring(fps)
-                        elseif token == "ping" then
-                            return tostring(ping)
-                        elseif token == "time" then
-                            return os.date("%H:%M")
-                        end
-                        return "{" .. token .. "}"
-                    end))
-                end
-                task.wait(0.75)
-            end
-        end)
-    end
-
-    self._watermarkTemplate = template
-    tween(wm, { Position = UDim2.fromOffset(12, 10) }, 0.45, Enum.EasingStyle.Quint)
-    wm.Visible = true
-end
-
 function Window:Notify(opts)
     opts = normalize(opts, { Text = "Content", Message = "Content", Image = "Icon" })
-    if opts.Icon == nil and opts.Type then
-        for _, candidate in ipairs(NOTIFY_TYPE_ICONS[opts.Type] or {}) do
-            if resolveIcon(candidate, true) then
-                opts.Icon = candidate
-                break
-            end
-        end
-    end
     local duration = opts.Duration or 4
     local titleColor = NOTIFY_COLORS[opts.Type] or Theme.Text
 
@@ -5245,8 +4951,6 @@ end
 
 local Airflow = Library
 
-task.spawn(function()
-    Airflow:LoadFont({ Name = "ValleySans" })
-end)
+Airflow:LoadFont({ Name = "ValleySans" })
 
 return Library
